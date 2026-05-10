@@ -35,7 +35,7 @@
 - **Máy chủ Backend**:
   - `100.100.100.130:9000` (Node.js 1)
   - `100.100.100.131:9000` (Node.js 2)
-- **Health Check**: 
+- **Health Check**:
   - `max_fails=3`: Tối đa 3 lần thất bại
   - `fail_timeout=30s`: Thời gian phục hồi 30 giây
 
@@ -94,6 +94,11 @@ location /api/
 | **sendfile** | on | Zero-copy file transfer |
 | **tcp_nopush** | on | Tối ưu network packets |
 | **gzip_comp_level** | 5 | Cân bằng CPU vs compression |
+
+### 6. **CORS (Cross-Origin Resource Sharing)**
+- **Cho phép requests từ domains khác nhau**
+- **Hỗ trợ preflight OPTIONS requests**
+- **Kiểm soát Access-Control headers**
 
 ---
 
@@ -185,7 +190,7 @@ upstream api_backend {
     # least_conn;      # Ít kết nối nhất
     # ip_hash;         # Cố định IP
     # random;          # Ngẫu nhiên
-    
+
     server 100.100.100.130:9000;
     server 100.100.100.131:9000;
 }
@@ -211,7 +216,91 @@ location /api/ {
 }
 ```
 
----
+### Nếu muốn cấu hình CORS (Cross-Origin Resource Sharing):
+
+#### **Cách 1: CORS cho tất cả origins (Development)**
+```nginx
+location /api/ {
+    # Cho phép tất cả origins
+    add_header 'Access-Control-Allow-Origin' '*' always;
+    add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, PATCH, OPTIONS' always;
+    add_header 'Access-Control-Allow-Headers' 'Content-Type, Authorization, X-Requested-With' always;
+    add_header 'Access-Control-Max-Age' '3600' always;
+
+    # Handle preflight requests
+    if ($request_method = 'OPTIONS') {
+        return 204;
+    }
+
+    proxy_pass http://api_backend;
+    # ... rest of config
+}
+```
+
+#### **Cách 2: CORS cho specific origins (Production - RECOMMENDED)**
+```nginx
+# Map specific origins
+map $http_origin $cors_origin {
+    default "";
+    "https://100.100.100.129" "https://100.100.100.129";
+    "https://yourdomain.com" "https://yourdomain.com";
+    "https://www.yourdomain.com" "https://www.yourdomain.com";
+}
+
+location /api/ {
+    # Chỉ cho phép origins được xác định
+    add_header 'Access-Control-Allow-Origin' $cors_origin always;
+    add_header 'Access-Control-Allow-Credentials' 'true' always;
+    add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, PATCH, OPTIONS' always;
+    add_header 'Access-Control-Allow-Headers' 'Content-Type, Authorization, X-Requested-With' always;
+    add_header 'Access-Control-Max-Age' '3600' always;
+
+    # Handle preflight requests
+    if ($request_method = 'OPTIONS') {
+        return 204;
+    }
+
+    proxy_pass http://api_backend;
+    # ... rest of config
+}
+```
+
+#### **Cách 3: CORS với cache bypass (cho authenticated requests)**
+```nginx
+location /api/ {
+    add_header 'Access-Control-Allow-Origin' 'https://yourdomain.com' always;
+    add_header 'Access-Control-Allow-Credentials' 'true' always;
+    add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, PATCH, OPTIONS' always;
+    add_header 'Access-Control-Allow-Headers' 'Content-Type, Authorization' always;
+    add_header 'Access-Control-Expose-Headers' 'X-Total-Count, X-Page-Count' always;
+
+    # Handle preflight requests
+    if ($request_method = 'OPTIONS') {
+        return 204;
+    }
+
+    # Don't cache OPTIONS requests
+    if ($request_method = 'OPTIONS') {
+        proxy_cache off;
+    }
+
+    proxy_pass http://api_backend;
+    # ... rest of config
+}
+```
+
+#### **CORS Headers Giải thích:**
+
+| Header | Giá trị | Ý nghĩa |
+|--------|--------|---------|
+| **Access-Control-Allow-Origin** | `*` hoặc domain | Các origins được phép truy cập |
+| **Access-Control-Allow-Methods** | GET, POST, ... | Các HTTP methods được phép |
+| **Access-Control-Allow-Headers** | Content-Type, ... | Các headers được phép gửi |
+| **Access-Control-Allow-Credentials** | true/false | Cho phép cookies/auth tokens |
+| **Access-Control-Max-Age** | 3600 | Thời gian cache preflight (giây) |
+| **Access-Control-Expose-Headers** | X-Total-Count, ... | Headers mà client có thể đọc |
+
+
 
 ## 📝 Lưu ý
 
@@ -220,6 +309,63 @@ location /api/ {
 - Kiểm tra logs khi có lỗi
 - Sử dụng reload thay vì restart để tránh downtime
 - Cấu hình này dùng self-signed cert; dùng cert thực cho production
+
+---
+
+## 🔐 CORS (Cross-Origin Resource Sharing) - Chi tiết
+
+### CORS là gì?
+**CORS** là một cơ chế bảo mật của trình duyệt web để kiểm soát các requests từ một domain này sang domain khác.
+
+**Ví dụ:**
+- Frontend ở `https://yourdomain.com` muốn gọi API ở `https://api.yourdomain.com` → **Là cross-origin**, cần CORS
+- Frontend ở `https://100.100.100.129:443` gọi API ở `https://100.100.100.129:443/api/` → **Cùng origin**, không cần CORS
+
+### Khi nào cần CORS?
+- ✅ Frontend (React) và API ở domains khác nhau
+- ✅ Mobile app gọi API từ server
+- ✅ Third-party integrations
+- ❌ Khi Frontend và API cùng origin (không cần)
+
+### Preflight Request là gì?
+Khi browser gửi `POST`, `PUT`, `DELETE` request có `Content-Type: application/json`, nó sẽ:
+1. **Gửi OPTIONS request** (preflight) trước
+2. **Kiểm tra headers CORS** từ server
+3. **Nếu OK**, mới gửi request thực tế
+
+```
+Browser:  OPTIONS /api/users HTTP/1.1
+          Origin: https://yourdomain.com
+
+Nginx:    HTTP/1.1 204 No Content
+          Access-Control-Allow-Origin: https://yourdomain.com
+
+Browser:  POST /api/users (request thực tế)
+```
+
+### Security Best Practices
+```nginx
+# ❌ KHÔNG dùng trong production
+add_header 'Access-Control-Allow-Origin' '*';  # Quá rộng mở!
+
+# ✅ RECOMMENDED - Danh sách cụ thể
+map $http_origin $cors_origin {
+    "https://yourdomain.com" "https://yourdomain.com";
+    "https://www.yourdomain.com" "https://www.yourdomain.com";
+    default "";
+}
+add_header 'Access-Control-Allow-Origin' $cors_origin;
+
+# ✅ Hạn chế methods và headers
+add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE' always;
+add_header 'Access-Control-Allow-Headers' 'Content-Type, Authorization' always;
+
+# ✅ Credentials (cookies/tokens)
+add_header 'Access-Control-Allow-Credentials' 'true';
+
+# ✅ Cache preflight requests
+add_header 'Access-Control-Max-Age' '3600';
+```
 
 ---
 
@@ -232,3 +378,7 @@ location /api/ {
 | **Slow response** | Kiểm tra cache (X-Proxy-Cache header), tăng timeouts |
 | **Too many redirects** | Kiểm tra HTTP→HTTPS redirect logic |
 | **WebSocket error** | Đảm bảo Upgrade headers được set đúng |
+| **CORS error: No 'Access-Control-Allow-Origin'** | Thêm CORS headers vào location block |
+| **CORS error: Credentials not allowed** | Set `Access-Control-Allow-Credentials: true` và Origin cụ thể (không `*`) |
+| **CORS preflight failed (OPTIONS 405)** | Thêm xử lý OPTIONS method: `if ($request_method = 'OPTIONS') { return 204; }` |
+| **CORS error: Method not allowed** | Kiểm tra `Access-Control-Allow-Methods` bao gồm phương thức cần dùng |
