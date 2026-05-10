@@ -1,0 +1,107 @@
+# Load balancer configuration
+upstream api_backend {
+    # round_robin; # Thuật toán mặc định
+    # least_conn;
+    # ip_hash;
+
+    server 100.100.100.130:9000 max_fails=3 fail_timeout=30s;
+    server 100.100.100.131:9000 max_fails=3 fail_timeout=30s; # Nodejs 2
+}
+
+upstream web_frontend {
+    server 100.100.100.129:8080;
+}
+
+# 1. Chuyển hướng từ HTTP sang HTTPS
+server {
+    listen 80;
+    server_name 100.100.100.129;
+    return 301 https://$host$request_uri;
+}
+
+# 2. Cấu hình HTTPS chính
+server {
+    listen 443 ssl;
+    http2 on; # Cú pháp chuẩn cho các bản Nginx mới
+    server_name 100.100.100.129;
+
+    # SSL Certs
+    ssl_certificate /etc/nginx/ssl/nginx-selfsigned.crt;
+    ssl_certificate_key /etc/nginx/ssl/nginx-selfsigned.key;
+
+    # Bảo mật Headers
+    add_header X-Frame-Options "SAMEORIGIN";
+    add_header X-XSS-Protection "1; mode=block";
+    add_header X-Content-Type-Options "nosniff";
+    proxy_hide_header X-Powered-By;
+
+    # Giới hạn dung lượng upload
+    client_max_body_size 10M;
+
+    # ==========================================
+    # GIAO DIỆN REACT (FRONTEND)
+    # ==========================================
+    location / {
+        proxy_pass http://web_frontend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Hỗ trợ WebSocket
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    # Tối ưu cache cho các file tĩnh (Bỏ ra ngoài, ngang hàng với location /)
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
+        proxy_pass http://web_frontend;
+        expires 1d;
+        add_header Cache-Control "public, no-transform";
+        access_log off;
+    }
+
+    # Xử lý riêng cho index.html để không bị lưu cache cũ (Ngang hàng)
+    location = /index.html {
+        proxy_pass http://web_frontend;
+        expires 1m;
+        add_header Cache-Control "no-store, no-cache, must-revalidate";
+    }
+
+    # ==========================================
+    # API BACKEND (LOAD BALANCING)
+    # ==========================================
+    location /api/ {
+        proxy_pass http://api_backend;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Thời gian chờ
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+
+        # Caching API
+        proxy_cache MY_API_CACHE; # trả về cache status trong header để debug
+        proxy_cache_methods GET; # Chỉ cache các request GET
+        proxy_cache_valid 200 302 10m; # Cache các phản hồi thành công trong 10 phút
+        proxy_cache_valid 404 1m; # Cache lỗi 404 trong 1 phút (tùy chọn)
+
+        proxy_cache_bypass $http_authorization $cookie_nocache; # Bỏ cache nếu có header Authorization hoặc cookie nocache
+        proxy_no_cache $http_authorization $cookie_nocache;     # Không lưu cache nếu có header Authorization hoặc cookie nocache
+
+        add_header X-Proxy-Cache $upstream_cache_status; # Thêm header để biết cache hit/miss
+    }
+
+    # ==========================================
+    # TRANG LỖI
+    # ==========================================
+    error_page 500 502 503 504 /50x.html;
+    location = /50x.html {
+        root /usr/share/nginx/html;
+    }
+}
