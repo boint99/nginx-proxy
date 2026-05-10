@@ -13,6 +13,14 @@ upstream web_frontend {
     server 100.100.100.129:8080;
 }
 
+# Map specific origins for CORS
+map $http_origin $cors_origin {
+    default "";
+    "https://100.100.100.129" "https://100.100.100.129";
+    "https://yourdomain.com" "https://yourdomain.com";
+    "https://www.yourdomain.com" "https://www.yourdomain.com";
+}
+
 # 1. Chuyển hướng từ HTTP sang HTTPS
 server {
     listen 80;
@@ -74,6 +82,18 @@ server {
     # API BACKEND (LOAD BALANCING)
     # ==========================================
     location /api/ {
+        # CORS Configuration
+        add_header 'Access-Control-Allow-Origin' $cors_origin always;
+        add_header 'Access-Control-Allow-Credentials' 'true' always;
+        add_header 'Access-Control-Allow-Methods' 'GET, POST, PUT, DELETE, PATCH, OPTIONS' always;
+        add_header 'Access-Control-Allow-Headers' 'Content-Type, Authorization, X-Requested-With' always;
+        add_header 'Access-Control-Max-Age' '3600' always;
+
+        # Handle preflight OPTIONS requests
+        if ($request_method = 'OPTIONS') {
+            return 204;
+        }
+
         proxy_pass http://api_backend;
 
         proxy_set_header Host $host;
@@ -105,4 +125,5 @@ server {
     location = /50x.html {
         root /usr/share/nginx/html;
     }
+}
 }
