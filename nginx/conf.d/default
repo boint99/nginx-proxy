@@ -1,3 +1,4 @@
+#/etc/nginx/conf.d/default
 # Load balancer configuration
 upstream api_backend {
     # round_robin; # Thuật toán mặc định
