@@ -29,3 +29,19 @@ access_log /var/log/nginx/access.log main;
 # 1. Phân quyền thư mục Log
 chown -R nginx:nginx /var/log/nginx/
 chmod 755 /var/log/nginx/
+
+## 🛠 3. copy file
+cp -R checklog.sh /etc/cron.daily/checklog
+chmod +x /etc/cron.daily/checklog
+
+## 🛠 4. Check log
+ls -lrt /var/log/nginx/
+tail -f /var/log/nginx/
+
+
+##Ép buộc Logrotate chạy ngay lập tức (để test)
+# Xóa file trạng thái cũ
+rm -f /var/lib/logrotate/logrotate.status
+
+# Chạy ép buộc
+logrotate -f /etc/logrotate.d/nginx
